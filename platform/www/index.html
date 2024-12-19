@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Media Streaming Server</title>
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://vjs.zencdn.net/7.11.4/video-js.css" rel="stylesheet" />
+    <script src="https://vjs.zencdn.net/7.11.4/video.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+        .video-card {
+            margin-bottom: 20px;
+        }
+        .video-container {
+            position: relative;
+            padding-bottom: 56.25%;
+            height: 0;
+            overflow: hidden;
+        }
+        .video-container video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
+            <a class="navbar-brand" href="#">Media Streaming Server</a>
+            <button class="btn btn-primary ml-auto" data-toggle="modal" data-target="#uploadModal">Upload Video</button>
+        </nav>
+
+        <div class="modal fade" id="uploadModal" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Upload Video</h5>
+                        <button type="button" class="close" data-dismiss="modal">
+                            <span>&times;</span>
+                        </button>
+                    </div>
+                    <div class="modal-body">
+                        <form id="uploadForm" enctype="multipart/form-data">
+                            <div class="form-group">
+                                <input type="file" name="file" accept="video/*" class="form-control-file">
+                            </div>
+                            <div class="progress mb-3" style="display: none;">
+                                <div class="progress-bar" role="progressbar" style="width: 0%"></div>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Upload</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <h2>Uploaded Videos</h2>
+        <div id="video-grid" class="row"></div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.5.4/dist/umd/popper.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    <script>
+        function initializePlayer(videoElement, source) {
+            console.log('Initializing player for source:', source);
+            
+            if (source.startsWith('/')) {
+                source = window.location.protocol + '//' + window.location.host + source;
+            }
+            
+            if (Hls.isSupported()) {
+                const hls = new Hls({
+                    debug: true,
+                    enableWorker: true,
+                    autoLevelCapping: -1,
+                    startLevel: -1,
+                    xhrSetup: function(xhr) {
+                        xhr.withCredentials = false;
+                    }
+                });
+                
+                console.log('Loading source:', source);
+                hls.loadSource(source);
+                hls.attachMedia(videoElement);
+                
+                hls.on(Hls.Events.ERROR, function(event, data) {
+                    console.error('HLS error:', data);
+                    if (data.fatal) {
+                        switch(data.type) {
+                            case Hls.ErrorTypes.NETWORK_ERROR:
+                                console.error('Network error:', data);
+                                hls.startLoad();
+                                break;
+                            case Hls.ErrorTypes.MEDIA_ERROR:
+                                console.error('Media error:', data);
+                                hls.recoverMediaError();
+                                break;
+                            default:
+                                console.error('Unrecoverable error:', data);
+                                break;
+                        }
+                    }
+                });
+
+                hls.on(Hls.Events.MANIFEST_PARSED, function(event, data) {
+                    console.log('Available qualities:', data.levels.map(l => l.height + 'p'));
+                    videoElement.play().catch(e => console.error('Play error:', e));
+                });
+            } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
+                videoElement.src = source;
+            }
+        }
+
+        fetch('/api/videos')
+            .then(response => response.json())
+            .then(data => {
+                console.log('Received videos:', data);
+                const videoGrid = document.getElementById('video-grid');
+                data.forEach((video, index) => {
+                    const col = document.createElement('div');
+                    col.className = 'col-md-4 video-card';
+                    col.innerHTML = `
+                        <div class="card">
+                            <div class="video-container">
+                                <video id="video-${index}" class="video-js vjs-default-skin" controls preload="auto">
+                                    <source src="${video.url}" type="application/x-mpegURL">
+                                </video>
+                            </div>
+                            <div class="card-body">
+                                <h5 class="card-title">${video.original_name}</h5>
+                            </div>
+                        </div>
+                    `;
+                    videoGrid.appendChild(col);
+
+                    const playerElement = document.getElementById(`video-${index}`);
+                    initializePlayer(playerElement, video.url);
+                });
+            })
+            .catch(error => console.error('Error loading videos:', error));
+
+        document.getElementById('uploadForm').onsubmit = function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            const progressBar = this.querySelector('.progress');
+            const progressBarInner = progressBar.querySelector('.progress-bar');
+            
+            progressBar.style.display = 'block';
+            progressBarInner.style.width = '0%';
+            
+            fetch('/api/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    alert('Upload successful! Video is being processed.');
+                    location.reload();
+                } else {
+                    alert('Upload failed: ' + data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Upload failed!');
+            })
+            .finally(() => {
+                progressBar.style.display = 'none';
+                $('#uploadModal').modal('hide');
+            });
+        };
+    </script>
+</body>
+</html>

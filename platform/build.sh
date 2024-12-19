@@ -1,0 +1,1 @@
+docker build -t nginx-rtmp-server -f Dockerfile .
